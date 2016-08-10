@@ -154,10 +154,12 @@ class ClusterController(wsgi.Controller):
             flavor_id = utils.get_id_from_href(node['flavorRef'])
             if 'volume' in node:
                 volume_size = int(node['volume']['size'])
+                volume_type = node['volume'].get('volume_type')
             else:
                 volume_size = None
             instances.append({"flavor_id": flavor_id,
-                              "volume_size": volume_size})
+                              "volume_size": volume_size,
+                              "volume_type": volume_type})
 
         cluster = models.Cluster.create(context, name, datastore,
                                         datastore_version, instances)
