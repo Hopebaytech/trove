@@ -72,6 +72,7 @@ from trove import rpc
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 VOLUME_TIME_OUT = CONF.volume_time_out  # seconds.
+ROOT_VOLUME_TIME_OUT = CONF.root_volume_time_out  # seconds.
 DNS_TIME_OUT = CONF.dns_time_out  # seconds.
 RESIZE_TIME_OUT = CONF.resize_time_out  # seconds.
 REVERT_TIME_OUT = CONF.revert_time_out  # seconds.
@@ -678,12 +679,17 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
         LOG.debug("Begin _create_server_volume_individually for id: %s" %
                   self.id)
         server = None
+        flavor = self.nova_client.flavors.get(flavor_id)
+        root_size = flavor.disk
+        root_volume_info = self._build_root_volume_info(volume_size=root_size,
+                                                        image_id=image_id)
         volume_info = self._build_volume_info(datastore_manager,
                                               volume_size=volume_size,
                                               volume_type=volume_type)
         block_device_mapping = volume_info['block_device']
+        block_device_mapping.update(root_volume_info['block_device'])
         try:
-            server = self._create_server(flavor_id, image_id, security_groups,
+            server = self._create_server(flavor_id, None, security_groups,
                                          datastore_manager,
                                          block_device_mapping,
                                          availability_zone, nics, files)
@@ -711,6 +717,31 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                     volume_size, volume_type, datastore_manager)
             except Exception as e:
                 msg = _("Failed to create volume for instance %s") % self.id
+                err = inst_models.InstanceTasks.BUILDING_ERROR_VOLUME
+                self._log_and_raise(e, msg, err)
+        else:
+            LOG.debug("device_path = %s" % device_path)
+            LOG.debug("mount_point = %s" % mount_point)
+            volume_info = {
+                'block_device': None,
+                'device_path': device_path,
+                'mount_point': mount_point,
+                'volumes': None,
+            }
+        return volume_info
+
+    def _build_root_volume_info(self, volume_size=None, image_id=None):
+        volume_info = None
+        volume_support = self.volume_support
+        device_path = "/dev/vda"
+        mount_point = "/"
+        LOG.debug("trove volume support = %s" % volume_support)
+        if volume_support:
+            try:
+                volume_info = self._create_root_volume(
+                    volume_size, image_id)
+            except Exception as e:
+                msg = _("Failed to create root for instance %s") % self.id
                 err = inst_models.InstanceTasks.BUILDING_ERROR_VOLUME
                 self._log_and_raise(e, msg, err)
         else:
@@ -755,6 +786,28 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
         LOG.debug("End _create_volume for id: %s" % self.id)
         return self._build_volume(v_ref, datastore_manager)
 
+    def _create_root_volume(self, volume_size, image_id):
+        LOG.debug("Begin _create_root_volume for id: %s" % self.id)
+        volume_client = create_cinder_client(self.context)
+        volume_desc = ("root volume for %s" % self.id)
+        volume_ref = volume_client.volumes.create(
+            volume_size, name="root-%s" % self.id,
+            description=volume_desc, volume_type=CONF.root_volume_type,
+            imageRef=image_id
+        )
+
+        utils.poll_until(
+            lambda: volume_client.volumes.get(volume_ref.id),
+            lambda v_ref: v_ref.status in ['available', 'error'],
+            sleep_time=2,
+            time_out=ROOT_VOLUME_TIME_OUT)
+
+        v_ref = volume_client.volumes.get(volume_ref.id)
+        if v_ref.status in ['error']:
+            raise VolumeCreationFailure()
+        LOG.debug("End _create_root_volume for id: %s" % self.id)
+        return self._build_root_volume(v_ref)
+
     def _build_volume(self, v_ref, datastore_manager):
         LOG.debug("Created volume %s" % v_ref)
         # The mapping is in the format:
@@ -770,6 +823,29 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
 
         device_path = self.device_path
         mount_point = CONF.get(datastore_manager).mount_point
+        LOG.debug("device_path = %s" % device_path)
+        LOG.debug("mount_point = %s" % mount_point)
+
+        volume_info = {'block_device': block_device,
+                       'device_path': device_path,
+                       'mount_point': mount_point,
+                       'volumes': created_volumes}
+        return volume_info
+
+    def _build_root_volume(self, v_ref):
+        LOG.debug("Created root volume %s" % v_ref)
+        # The mapping is in the format:
+        # <id>:[<type>]:[<size(GB)>]:[<delete_on_terminate>]
+        # setting the delete_on_terminate instance to true=1
+        mapping = "%s:%s:%s:%s" % (v_ref.id, "volume", v_ref.size, 1)
+        block_device = {"vda": mapping}
+        created_volumes = [{'id': v_ref.id,
+                            'size': v_ref.size}]
+        LOG.debug("root_device = %s" % block_device)
+        LOG.debug("root volume = %s" % created_volumes)
+
+        device_path = "/dev/vda"
+        mount_point = "/"
         LOG.debug("device_path = %s" % device_path)
         LOG.debug("mount_point = %s" % mount_point)
 
