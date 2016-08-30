@@ -157,6 +157,8 @@ common_opts = [
                help='File system type used to format a volume.'),
     cfg.StrOpt('cinder_volume_type', default=None,
                help='Volume type to use when provisioning a Cinder volume.'),
+    cfg.StrOpt('root_volume_type', default=None,
+               help='Volume type to use when provisioning the root volume.'),
     cfg.StrOpt('format_options', default='-m 5',
                help='Options to use when formatting a volume.'),
     cfg.IntOpt('volume_format_timeout', default=120,
@@ -204,6 +206,8 @@ common_opts = [
                help='Maximum time (in seconds) to wait for a server delete.'),
     cfg.IntOpt('volume_time_out', default=60,
                help='Maximum time (in seconds) to wait for a volume attach.'),
+    cfg.IntOpt('root_volume_time_out', default=600,
+               help='Maximum time (in seconds) to wait for the root volume.'),
     cfg.IntOpt('heat_time_out', default=60,
                help='Maximum time (in seconds) to wait for a Heat request to '
                     'complete.'),
